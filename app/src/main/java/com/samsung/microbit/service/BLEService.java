@@ -347,6 +347,7 @@ public class BLEService extends Service {
     }
 
     private void sendMicrobitFirmware(String firmware) {
+        Log.v("Partial", "sendMicrobitFirmware");
         if(inputMessenger == null) {
             Log.e(TAG, "wrong inputMessenger");
             return;
@@ -1051,6 +1052,7 @@ public class BLEService extends Service {
         }
 
         logi("startupConnection() :: end");
+
     }
 
     private void discoverFailed() {
@@ -1081,4 +1083,5 @@ public class BLEService extends Service {
 
         return null;
     }
+
 }

@@ -26,4 +26,7 @@ public class CharacteristicUUIDs {
 
     public static final UUID FIRMWARE_REVISION_UUID = new UUID(0x00002A2600001000L, 0x800000805F9B34FBL);
 
+    public static final UUID MEMORY_MAP = UUID.fromString("e97d3b10-251d-470a-a062-fa1922dfa9a8");
+    public static final UUID PARTIAL_FLASH_WRITE = UUID.fromString("e97faa6d-251d-470a-a062-fa1922dfa9a8");
+
 }

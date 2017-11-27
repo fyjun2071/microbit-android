@@ -46,11 +46,13 @@ import com.samsung.microbit.data.model.Project;
 import com.samsung.microbit.data.model.ui.FlashActivityState;
 import com.samsung.microbit.service.BLEService;
 import com.samsung.microbit.service.DfuService;
+import com.samsung.microbit.service.PartialFlashService;
 import com.samsung.microbit.ui.BluetoothChecker;
 import com.samsung.microbit.ui.PopUp;
 import com.samsung.microbit.ui.adapter.ProjectAdapter;
 import com.samsung.microbit.utils.BLEConnectionHandler;
 import com.samsung.microbit.utils.FileUtils;
+import com.samsung.microbit.utils.HexUtils;
 import com.samsung.microbit.utils.IOUtils;
 import com.samsung.microbit.utils.ProjectsHelper;
 import com.samsung.microbit.utils.ServiceUtils;
@@ -1047,6 +1049,7 @@ public class ProjectActivity extends Activity implements View.OnClickListener, B
      */
     protected void startFlashing() {
         logi(">>>>>>>>>>>>>>>>>>> startFlashing called  >>>>>>>>>>>>>>>>>>>  ");
+
         //Reset all stats value
         m_BinSizeStats = "0";
         m_MicroBitFirmware = "0.0";
@@ -1056,19 +1059,21 @@ public class ProjectActivity extends Activity implements View.OnClickListener, B
 
         MBApp application = MBApp.getApp();
 
-        final Intent service = new Intent(application, DfuService.class);
-        service.putExtra(DfuService.EXTRA_DEVICE_ADDRESS, currentMicrobit.mAddress);
-        service.putExtra(DfuService.EXTRA_DEVICE_NAME, currentMicrobit.mPattern);
-        service.putExtra(DfuService.EXTRA_DEVICE_PAIR_CODE, currentMicrobit.mPairingCode);
-        service.putExtra(DfuService.EXTRA_FILE_MIME_TYPE, DfuService.MIME_TYPE_OCTET_STREAM);
-        service.putExtra(DfuService.EXTRA_FILE_PATH, mProgramToSend.filePath); // a path or URI must be provided.
-        service.putExtra(DfuService.EXTRA_KEEP_BOND, false);
-        service.putExtra(DfuService.INTENT_REQUESTED_PHASE, 2);
+        // final Intent service = new Intent(application, DfuService.class);
+        final Intent service = new Intent(application, PartialFlashService.class);
+        service.putExtra(PartialFlashService.EXTRA_DEVICE_ADDRESS, currentMicrobit.mAddress);
+        service.putExtra(PartialFlashService.EXTRA_DEVICE_NAME, currentMicrobit.mPattern);
+        service.putExtra(PartialFlashService.EXTRA_DEVICE_PAIR_CODE, currentMicrobit.mPairingCode);
+        service.putExtra(PartialFlashService.EXTRA_FILE_MIME_TYPE, DfuService.MIME_TYPE_OCTET_STREAM);
+        service.putExtra(PartialFlashService.EXTRA_PF_FILE_PATH, mProgramToSend.filePath); // a path or URI must be provided.
+        service.putExtra(PartialFlashService.EXTRA_KEEP_BOND, false);
+        service.putExtra(PartialFlashService.INTENT_REQUESTED_PHASE, 2);
         if(notAValidFlashHexFile) {
-            service.putExtra(DfuService.EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE, Constants.JUST_PAIRED_DELAY_ON_CONNECTION);
+            service.putExtra(PartialFlashService.EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE, Constants.JUST_PAIRED_DELAY_ON_CONNECTION);
         }
 
         application.startService(service);
+
     }
 
     /**

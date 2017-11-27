@@ -168,6 +168,11 @@
             android:enabled="true"
             android:exported="false"/>
 
+        <service
+            android:name=".service.PartialFlashService"
+            android:enabled="true"
+            />
+
         <activity
             android:name=".ui.activity.SplashScreenActivity"
             android:screenOrientation="locked"

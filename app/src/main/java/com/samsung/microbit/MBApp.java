@@ -5,6 +5,12 @@ import android.graphics.Typeface;
 import android.util.Log;
 
 import com.samsung.microbit.core.GoogleAnalyticsManager;
+import com.samsung.microbit.core.bluetooth.BluetoothUtils;
+import com.samsung.microbit.service.BLEService;
+import com.samsung.microbit.utils.HexUtils;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
 
 /**
  * Represents a custom class of the app.
@@ -12,6 +18,7 @@ import com.samsung.microbit.core.GoogleAnalyticsManager;
  * such as app context, font styles and etc.
  */
 public class MBApp extends Application {
+
 
     private static MBApp app = null;
 
@@ -29,6 +36,7 @@ public class MBApp extends Application {
         GoogleAnalyticsManager.createInstance(this);
 
         Log.d("MBApp", "App Created");
+
     }
 
     /**
