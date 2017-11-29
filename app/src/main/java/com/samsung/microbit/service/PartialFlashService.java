@@ -1,7 +1,6 @@
 package com.samsung.microbit.service;
 
 import android.app.IntentService;
-import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -12,18 +11,14 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.content.Intent;
-import android.os.IBinder;
 import android.support.annotation.Nullable;
 import android.util.Log;
-import android.widget.Toast;
 
-import com.samsung.microbit.MBApp;
 import com.samsung.microbit.utils.HexUtils;
-import com.samsung.microbit.utils.MemoryUnits;
 
 import java.io.IOException;
-import java.util.UUID;
 
+import static com.samsung.microbit.data.constants.CharacteristicUUIDs.MEMORY_MAP;
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_WRITE;
 import static com.samsung.microbit.data.constants.GattServiceUUIDs.PARTIAL_FLASHING_SERVICE;
 
@@ -45,6 +40,8 @@ public class PartialFlashService extends IntentService {
     BluetoothGattService Service;
 
     private Boolean waitToSend = false;
+
+    private Boolean bleReady = false;
 
     private static final int STATE_DISCONNECTED = 0;
     private static final int STATE_CONNECTING = 1;
@@ -96,7 +93,6 @@ public class PartialFlashService extends IntentService {
                 public void onServicesDiscovered(BluetoothGatt gatt, int status) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         Log.w(TAG, "onServicesDiscovered SUCCESS");
-                        waitToSend = false;
                     } else {
                         Log.w(TAG, "onServicesDiscovered received: " + status);
                     }
@@ -105,6 +101,7 @@ public class PartialFlashService extends IntentService {
                     if (Service == null) {
                         Log.e(TAG, "service not found!");
                     }
+                    bleReady = true;
 
                 }
 
@@ -115,6 +112,7 @@ public class PartialFlashService extends IntentService {
                                                  int status) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         // broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
+                        bleReady = true;
                     }
                 }
 
@@ -124,18 +122,19 @@ public class PartialFlashService extends IntentService {
                                                 int status){
                     if(status == BluetoothGatt.GATT_SUCCESS) {
                         // Success
-                        Log.v("PartialFlash", "GATT status: Success");
+                        Log.v(TAG, "GATT status: Success");
+                        bleReady = true;
+                        waitToSend = false;
                     } else {
                         // Attempt to resend
-                        Log.v("PartialFlash", "GATT status:" + Integer.toString(status));
+                        Log.v(TAG, "GATT status:" + Integer.toString(status));
                     }
-                    // TODO Account for disconnect, will this get stuck?
                 }
 
             };
 
     public PartialFlashService() {
-        super("Partial Flash");
+        super(TAG);
     }
 
     // Write to BLE Flash Characteristic
@@ -156,7 +155,7 @@ public class PartialFlashService extends IntentService {
 
     public Boolean attemptPartialFlash(String filePath) {
 
-        Log.v("PartialFlash", filePath);
+        Log.v(TAG, filePath);
 
         int count = 0;
         HexUtils hex;
@@ -174,8 +173,8 @@ public class PartialFlashService extends IntentService {
                     if(hex.getRecordType() != 0) break;
 
                     // Log record being written
-                    Log.v("Partial Flash", "Hex Data  : " + hexData);
-                    Log.v("Partial Flash", "Hex Offset: " + Integer.toHexString(hex.getRecordOffset()));
+                    Log.v(TAG, "Hex Data  : " + hexData);
+                    Log.v(TAG, "Hex Offset: " + Integer.toHexString(hex.getRecordOffset()));
 
                     // Split into bytes
                     byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset());
@@ -196,7 +195,7 @@ public class PartialFlashService extends IntentService {
                 }
 
                 // Finished Writing
-                Log.v("Partial Flash", "Flash Complete");
+                Log.v(TAG, "Flash Complete");
 
             }
         } catch (IOException e) {
@@ -235,20 +234,20 @@ public class PartialFlashService extends IntentService {
         // BluetoothManager.
         mBluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         if (mBluetoothManager == null) {
-            Log.e("Partial Flash", "Unable to initialize BluetoothManager.");
+            Log.e(TAG, "Unable to initialize BluetoothManager.");
             return false;
         }
 
         mBluetoothAdapter = mBluetoothManager.getAdapter();
         if (mBluetoothAdapter == null) {
-            Log.e("Partial Flash", "Unable to obtain a BluetoothAdapter.");
+            Log.e(TAG, "Unable to obtain a BluetoothAdapter.");
             return false;
         }
 
         if (!mBluetoothAdapter.isEnabled())
             return false;
 
-        Log.v("PartialFlash","Connecting to the device...");
+        Log.v(TAG,"Connecting to the device...");
         if (device == null) {
             device = mBluetoothAdapter.getRemoteDevice(deviceId);
         }
@@ -270,8 +269,83 @@ public class PartialFlashService extends IntentService {
         final String deviceAddress = intent.getStringExtra(EXTRA_DEVICE_ADDRESS);
 
         initialize(deviceAddress);
-        attemptPartialFlash(filePath);
+        readMemoryMap();
+        // attemptPartialFlash(filePath);
 
+    }
+
+    /*
+    Read Memory Map from the MB
+     */
+    private Boolean readMemoryMap() {
+        boolean status; // Gatt Status
+
+
+        try {
+            while(!bleReady);
+            // Get Characteristic
+            BluetoothGattCharacteristic memoryMapChar = Service.getCharacteristic(MEMORY_MAP);
+            if (memoryMapChar == null) {
+                Log.e(TAG, "char not found!");
+                return false;
+            }
+
+            // Request Regions
+            memoryMapChar.setValue(0xFF, BluetoothGattCharacteristic.FORMAT_UINT8, 0);
+            bleReady = false;
+            status = mBluetoothGatt.writeCharacteristic(memoryMapChar);
+            while(!bleReady);
+            Log.v(TAG, "Region WRITE result: " + status);
+
+            // Log Names
+            bleReady = false;
+            status = mBluetoothGatt.readCharacteristic(memoryMapChar);
+            while(!bleReady);
+
+            Log.v(TAG, "Region READ result: " + status);
+            String regions = memoryMapChar.getStringValue(0);
+            Log.v(TAG, "Regions: " + regions);
+
+            // Iterate through regions to get ID #s
+            int i = 0;
+            byte[] byteArray;
+            while(regions.charAt(3 * i) != ' '){
+                Log.v(TAG, regions.substring(3 * i, (3 * i) + 3));
+
+                // Get Start, End, and Hash of each Region
+                // Request Region
+                byte[] selector = {(byte)(i & 0xFF)};
+                memoryMapChar.setValue(selector);
+                bleReady = false;
+                status = mBluetoothGatt.writeCharacteristic(memoryMapChar);
+                while(!bleReady);
+                Log.v(TAG, "Selector WRITE: " + status + ", DATA: " + memoryMapChar.getValue()[0]);
+
+                // Log Start/End
+                bleReady = false;
+                status = mBluetoothGatt.readCharacteristic(memoryMapChar);
+                while(!bleReady);
+                byteArray = memoryMapChar.getValue();
+                int startAddress = byteArray[3] << 24 | byteArray[2] << 16 | byteArray[1] << 8 | byteArray[0];
+                int endAddress   = byteArray[11] << 24 | byteArray[10] << 16 | byteArray[9] << 8 | byteArray[8];
+                Log.v(TAG, "Start: 0x" + Integer.toHexString(startAddress) + ", End: 0x" + Integer.toHexString(endAddress));
+
+                // Log Hash
+                bleReady = false;
+                status = mBluetoothGatt.readCharacteristic(memoryMapChar);
+                while(!bleReady);
+                byteArray = memoryMapChar.getValue();
+                Log.v(TAG, "Hash: " + byteArray.toString());
+
+                i++;
+            }
+
+
+        } catch (Exception e){
+            Log.e(TAG, e.toString());
+        }
+
+        return true;
     }
 
 }

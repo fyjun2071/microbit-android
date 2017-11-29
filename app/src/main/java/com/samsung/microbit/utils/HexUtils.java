@@ -18,6 +18,7 @@ import java.io.InterruptedIOException;
  */
 
 public class HexUtils {
+    private final static String TAG = HexUtils.class.getSimpleName();
 
     FileInputStream fis = null;
     BufferedReader reader = null;
@@ -71,7 +72,7 @@ public class HexUtils {
                         if(getRecordData(record).equals(magic)){
                             // Store Magic Address and Break
                             magicAddress = sectionAddress + getRecordAddress(record);
-                            Log.v("PartialFlash", "Magic Found!");
+                            Log.v(TAG, "Magic Found!");
                             return true;
                         }
                         break;
@@ -88,7 +89,7 @@ public class HexUtils {
 
             }
         } catch (Exception e){
-            Log.e("PartialFlash", e.toString());
+            Log.e(TAG, e.toString());
         }
 
         // If magic is never found and there is no EOF file marker
@@ -191,10 +192,10 @@ public class HexUtils {
         reader.reset();
 
         // Log Hashes and Addresses
-        Log.v("PartialFlash", "Section Address: 0x" + Integer.toHexString(sectionAddress));
-        Log.v("PartialFlash", "Magic Address:   0x" + Integer.toHexString(magicAddress));
-        Log.v("PartialFlash", "Template Hash:   "   + templateHash);
-        Log.v("PartialFlash", "Program Hash:    "   + programHash);
+        Log.v(TAG, "Section Address: 0x" + Integer.toHexString(sectionAddress));
+        Log.v(TAG, "Magic Address:   0x" + Integer.toHexString(magicAddress));
+        Log.v(TAG, "Template Hash:   "   + templateHash);
+        Log.v(TAG, "Program Hash:    "   + programHash);
 
         return true;
 
