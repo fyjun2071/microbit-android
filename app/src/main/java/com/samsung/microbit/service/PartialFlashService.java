@@ -14,6 +14,11 @@ import android.content.Intent;
 import android.support.annotation.Nullable;
 import android.util.Log;
 
+import com.samsung.microbit.MBApp;
+import com.samsung.microbit.core.bluetooth.BluetoothUtils;
+import com.samsung.microbit.data.constants.Constants;
+import com.samsung.microbit.data.model.ConnectedDevice;
+import com.samsung.microbit.utils.FileUtils;
 import com.samsung.microbit.utils.HexUtils;
 
 import java.io.IOException;
@@ -46,6 +51,9 @@ public class PartialFlashService extends IntentService {
     private static final int STATE_DISCONNECTED = 0;
     private static final int STATE_CONNECTING = 1;
     private static final int STATE_CONNECTED = 2;
+
+    // DAL Hash
+    String dalHash;
 
     public final static String ACTION_GATT_CONNECTED =
             "com.example.bluetooth.le.ACTION_GATT_CONNECTED";
@@ -162,8 +170,12 @@ public class PartialFlashService extends IntentService {
         try {
             hex = new HexUtils();
             if (hex.findHexMetaData(filePath)) {
-                // Ready to flash!
 
+                if(!hex.getTemplateHash().equals(dalHash)){
+                    return false;
+                }
+
+                // Ready to flash!
                 // Loop through data
                 String hexData;
                 while(true){
@@ -267,10 +279,33 @@ public class PartialFlashService extends IntentService {
     protected void onHandleIntent(@Nullable Intent intent) {
         final String filePath = intent.getStringExtra(EXTRA_PF_FILE_PATH);
         final String deviceAddress = intent.getStringExtra(EXTRA_DEVICE_ADDRESS);
+        final long notAValidFlashHexFile = intent.getLongExtra(EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE, 0);
 
         initialize(deviceAddress);
         readMemoryMap();
-        // attemptPartialFlash(filePath);
+        // If fails attempt full flash
+        if(!attemptPartialFlash(filePath))
+        {
+            ConnectedDevice currentMicrobit = BluetoothUtils.getPairedMicrobit(this);
+
+            MBApp application = MBApp.getApp();
+
+            // final Intent service = new Intent(application, DfuService.class);
+            final Intent service = new Intent(application, DfuService.class);
+            service.putExtra(DfuService.EXTRA_DEVICE_ADDRESS, currentMicrobit.mAddress);
+            service.putExtra(DfuService.EXTRA_DEVICE_NAME, currentMicrobit.mPattern);
+            service.putExtra(DfuService.EXTRA_DEVICE_PAIR_CODE, currentMicrobit.mPairingCode);
+            service.putExtra(DfuService.EXTRA_FILE_MIME_TYPE, DfuService.MIME_TYPE_OCTET_STREAM);
+            service.putExtra(DfuService.EXTRA_FILE_PATH, filePath); // a path or URI must be provided.
+            service.putExtra(DfuService.EXTRA_KEEP_BOND, false);
+            service.putExtra(DfuService.INTENT_REQUESTED_PHASE, 2);
+            if(notAValidFlashHexFile == Constants.JUST_PAIRED_DELAY_ON_CONNECTION) {
+                service.putExtra(DfuService.EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE, Constants.JUST_PAIRED_DELAY_ON_CONNECTION);
+            }
+
+            application.startService(service);
+        }
+
 
     }
 
@@ -326,8 +361,8 @@ public class PartialFlashService extends IntentService {
                 status = mBluetoothGatt.readCharacteristic(memoryMapChar);
                 while(!bleReady);
                 byteArray = memoryMapChar.getValue();
-                int startAddress = byteArray[3] << 24 | byteArray[2] << 16 | byteArray[1] << 8 | byteArray[0];
-                int endAddress   = byteArray[11] << 24 | byteArray[10] << 16 | byteArray[9] << 8 | byteArray[8];
+                int startAddress = ((0xFF & byteArray[3]) << 24 | (0xFF & byteArray[2]) << 16 | (0xFF & byteArray[1]) << 8 | (0xFF & byteArray[0]));
+                int endAddress   = ((0xFF & byteArray[11]) << 24 | (0xFF & byteArray[10]) << 16 | (0xFF & byteArray[9]) << 8 | (0xFF & byteArray[8]));
                 Log.v(TAG, "Start: 0x" + Integer.toHexString(startAddress) + ", End: 0x" + Integer.toHexString(endAddress));
 
                 // Log Hash
@@ -335,7 +370,14 @@ public class PartialFlashService extends IntentService {
                 status = mBluetoothGatt.readCharacteristic(memoryMapChar);
                 while(!bleReady);
                 byteArray = memoryMapChar.getValue();
-                Log.v(TAG, "Hash: " + byteArray.toString());
+                // Get Hash From Byte Array
+                // Convert to string
+                Log.v(TAG, "Hash: " + bytesToHex(byteArray).substring(0,16));
+
+                // IF DAL Store Hash for comparison
+                if(regions.substring(3 * i, (3 * i) + 3).equals("DAL")){
+                    dalHash = bytesToHex(byteArray).substring(0,16);
+                }
 
                 i++;
             }
@@ -346,6 +388,18 @@ public class PartialFlashService extends IntentService {
         }
 
         return true;
+    }
+
+    public static String bytesToHex(byte[] bytes) {
+        final char[] hexArray = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+        char[] hexChars = new char[bytes.length * 2];
+        int v;
+        for ( int j = 0; j < bytes.length; j++ ) {
+            v = bytes[j] & 0xFF;
+            hexChars[j * 2] = hexArray[v >>> 4];
+            hexChars[j * 2 + 1] = hexArray[v & 0x0F];
+        }
+        return new String(hexChars);
     }
 
 }
