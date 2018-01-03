@@ -11,8 +11,10 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.content.Intent;
+import android.os.SystemClock;
 import android.support.annotation.Nullable;
 import android.util.Log;
+import android.util.TimingLogger;
 
 import com.samsung.microbit.MBApp;
 import com.samsung.microbit.core.bluetooth.BluetoothUtils;
@@ -22,13 +24,15 @@ import com.samsung.microbit.utils.FileUtils;
 import com.samsung.microbit.utils.HexUtils;
 
 import java.io.IOException;
+import java.util.Timer;
 
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.MEMORY_MAP;
+import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_CONTROL;
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_WRITE;
 import static com.samsung.microbit.data.constants.GattServiceUUIDs.PARTIAL_FLASHING_SERVICE;
 
 /**
- * A class to communicate with and flash the micro:bit while avoiding the DFU Service
+ * A class to communicate with and flash the micro:bit without having to transfer the entire HEX file
  * Created by samkent on 07/11/2017.
  */
 
@@ -44,7 +48,15 @@ public class PartialFlashService extends IntentService {
     private BluetoothDevice device;
     BluetoothGattService Service;
 
+    BluetoothGattCharacteristic flashCharac;
+    BluetoothGattCharacteristic flashControlCharac;
+
     private Boolean waitToSend = false;
+
+    private static final byte PACKET_STATE_WAITING = 0;
+    private static final byte PACKET_STATE_SENT = (byte)0xFF;
+    private static final byte PACKET_STATE_RETRANSMIT = (byte)0xAA;
+    private byte packetState = PACKET_STATE_WAITING;
 
     private Boolean bleReady = false;
 
@@ -122,6 +134,7 @@ public class PartialFlashService extends IntentService {
                         // broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
                         bleReady = true;
                     }
+
                 }
 
                 @Override
@@ -139,6 +152,16 @@ public class PartialFlashService extends IntentService {
                     }
                 }
 
+                @Override
+                public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+                    super.onCharacteristicChanged(gatt, characteristic);
+                    /*byte notificationValue[] = characteristic.getValue();
+                    packetState = notificationValue[1];
+                    Log.v(TAG, "Write Notify: " + packetState);
+                    */
+
+                }
+
             };
 
     public PartialFlashService() {
@@ -148,22 +171,17 @@ public class PartialFlashService extends IntentService {
     // Write to BLE Flash Characteristic
     public Boolean writePartialFlash(byte data[]){
 
-        BluetoothGattCharacteristic charac = Service.getCharacteristic(PARTIAL_FLASH_WRITE);
-        if (charac == null) {
-            Log.e(TAG, "char not found!");
-            return false;
-        }
-
-        charac.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
-        charac.setValue(data);
-        boolean status = mBluetoothGatt.writeCharacteristic(charac);
+        flashCharac.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+        flashCharac.setValue(data);
+        boolean status = mBluetoothGatt.writeCharacteristic(flashCharac);
         return status;
 
     }
 
-    public Boolean attemptPartialFlash(String filePath) {
 
+    public Boolean attemptPartialFlash(String filePath) {
         Log.v(TAG, filePath);
+        long startTime = SystemClock.elapsedRealtime();
 
         int count = 0;
         HexUtils hex;
@@ -171,13 +189,17 @@ public class PartialFlashService extends IntentService {
             hex = new HexUtils();
             if (hex.findHexMetaData(filePath)) {
 
-                if(!hex.getTemplateHash().equals(dalHash)){
-                    return false;
-                }
+//                if(!hex.getTemplateHash().equals(dalHash)){
+//                    return false;
+//                }
 
                 // Ready to flash!
+                // Set up BLE notification
+                mBluetoothGatt.setCharacteristicNotification(flashControlCharac, true);
+
                 // Loop through data
                 String hexData;
+                int packetNum = 1;
                 while(true){
                     // Get next data to write
                     hexData = hex.getNextData();
@@ -189,7 +211,7 @@ public class PartialFlashService extends IntentService {
                     Log.v(TAG, "Hex Offset: " + Integer.toHexString(hex.getRecordOffset()));
 
                     // Split into bytes
-                    byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset());
+                    byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset(), packetNum);
 
                     // Write with response
                     // Wait for previous write to complete
@@ -199,15 +221,57 @@ public class PartialFlashService extends IntentService {
                     count++;
                     if(count == 4){
                         count = 0;
-                        Thread.sleep(100);
+                        // Wait for notification
+                        int waitTime = 0;
+                        while(packetState == PACKET_STATE_WAITING){
+                            Thread.sleep(7 + waitTime);
+                            bleReady = false;
+                            mBluetoothGatt.readCharacteristic(flashControlCharac);
+                            while(!bleReady);
+                            byte result[] = flashControlCharac.getValue();
+                            packetState = result[0];
+
+                            // Time out
+                            waitTime++;
+                            if(waitTime == 3) {
+                                packetState = PACKET_STATE_RETRANSMIT;
+                                Thread.sleep(15);
+                            }
+
+                            Log.v(TAG, "Packet State: " + bytesToHex(result));
+                        }
+
+                        // If notification is retransmit retransmit last block.
+                        // Else set start of new block
+                        if(packetState == PACKET_STATE_RETRANSMIT) {
+                            hex.rewind();
+                        } else {
+                            hex.setMark();
+                        }
+
+                        // Reset to waiting state
+                        packetState = PACKET_STATE_WAITING;
+
                     } else {
-                        Thread.sleep(100);
+                        Thread.sleep(5);
                     }
+
+                    // Increment packet #
+                    packetNum = packetNum + 1;
 
                 }
 
+                // Write End of Flash packet
+                writePartialFlash(recordToByteArray("FFFFFFFFFFFFFFFF", 0xFFFF, 0xFFFF));
+
                 // Finished Writing
                 Log.v(TAG, "Flash Complete");
+
+                // Time execution
+                long endTime = SystemClock.elapsedRealtime();
+                long elapsedMilliSeconds = endTime - startTime;
+                double elapsedSeconds = elapsedMilliSeconds / 1000.0;
+                Log.v(TAG, "Flash Time: " + Float.toString((float)elapsedSeconds) + " seconds");
 
             }
         } catch (IOException e) {
@@ -215,6 +279,7 @@ public class PartialFlashService extends IntentService {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
+
         return true;
     }
 
@@ -223,15 +288,17 @@ public class PartialFlashService extends IntentService {
     @param hexString string to convert
     @return byteArray of hex
      */
-    private static byte[] recordToByteArray(String hexString, int offset){
+    private static byte[] recordToByteArray(String hexString, int offset, int packetNum){
         int len = hexString.length();
-        byte[] data = new byte[(len/2) + 2];
+        byte[] data = new byte[(len/2) + 4];
         for(int i=0; i < len; i+=2){
             data[i / 2] = (byte) ((Character.digit(hexString.charAt(i), 16) << 4) + Character.digit(hexString.charAt(i+1), 16));
         }
 
         data[(len/2)]   = (byte)(offset >> 8);
         data[(len/2)+1] = (byte)(offset & 0xFF);
+        data[(len/2)+2] = (byte)(packetNum >> 8);
+        data[(len/2)+3] = (byte)(packetNum & 0xFF);
 
         return data;
     }
@@ -286,6 +353,8 @@ public class PartialFlashService extends IntentService {
         // If fails attempt full flash
         if(!attemptPartialFlash(filePath))
         {
+            Log.v(TAG, "Start Full Flash");
+
             ConnectedDevice currentMicrobit = BluetoothUtils.getPairedMicrobit(this);
 
             MBApp application = MBApp.getApp();
@@ -320,9 +389,22 @@ public class PartialFlashService extends IntentService {
             while(!bleReady);
             // Get Characteristic
             BluetoothGattCharacteristic memoryMapChar = Service.getCharacteristic(MEMORY_MAP);
+
             if (memoryMapChar == null) {
                 Log.e(TAG, "char not found!");
                 return false;
+            }
+
+            flashCharac = Service.getCharacteristic(PARTIAL_FLASH_WRITE);
+            if (flashCharac == null) {
+                Log.e(TAG, "char not found!");
+            }
+
+            flashControlCharac = Service.getCharacteristic(PARTIAL_FLASH_CONTROL);
+            if (flashControlCharac == null) {
+                Log.e(TAG, "char not found!");
+            } else {
+                Log.v(TAG, "flash control: " + flashControlCharac.toString());
             }
 
             // Request Regions

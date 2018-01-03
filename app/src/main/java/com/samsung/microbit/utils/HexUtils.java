@@ -22,7 +22,7 @@ public class HexUtils {
 
     FileInputStream fis = null;
     BufferedReader reader = null;
-    int BUFFER_LIMIT = 5000;
+    int BUFFER_LIMIT = 10000;
 
     String templateHash;
     String programHash;
@@ -213,6 +213,20 @@ public class HexUtils {
      */
     public int getRecordOffset(){
         return currentRecordOffset;
+    }
+
+    /*
+    Set mark to beginning of page
+     */
+    public void setMark() throws IOException {
+        reader.mark(BUFFER_LIMIT);
+    }
+
+    /*
+    Rewind to start of page
+     */
+    public void rewind() throws IOException {
+        reader.reset();
     }
 
 }
