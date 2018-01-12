@@ -77,6 +77,7 @@ public class PopUpActivity extends Activity implements View.OnClickListener {
 
         @Override
         public void onReceive(Context context, final Intent intent) {
+            Log.v("PopUpActivity", intent.toString());
             if(intent.getAction().equals(INTENT_ACTION_CLOSE)) {
                 Log.d("PopUpActivity", "BroadcastReceiver.INTENT_ACTION_CLOSE");
                 finish();
@@ -369,6 +370,7 @@ public class PopUpActivity extends Activity implements View.OnClickListener {
                 break;
         }
 
+        Log.v("PopUp", "Sending broadcast: " + intent.toString());
         LocalBroadcastManager.getInstance(this).sendBroadcastSync(intent);
     }
 }

@@ -1,35 +1,60 @@
 package com.samsung.microbit.service;
 
+import android.app.Activity;
 import android.app.IntentService;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.SystemClock;
 import android.support.annotation.Nullable;
+import android.support.v4.content.LocalBroadcastManager;
+import android.text.style.UpdateLayout;
 import android.util.Log;
 import android.util.TimingLogger;
 
 import com.samsung.microbit.MBApp;
 import com.samsung.microbit.core.bluetooth.BluetoothUtils;
 import com.samsung.microbit.data.constants.Constants;
+import com.samsung.microbit.data.constants.UUIDs;
 import com.samsung.microbit.data.model.ConnectedDevice;
+import com.samsung.microbit.ui.activity.NotificationActivity;
+import com.samsung.microbit.ui.activity.PopUpActivity;
 import com.samsung.microbit.utils.FileUtils;
 import com.samsung.microbit.utils.HexUtils;
 
 import java.io.IOException;
 import java.util.Timer;
+import java.util.UUID;
 
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.MEMORY_MAP;
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_CONTROL;
 import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_WRITE;
 import static com.samsung.microbit.data.constants.GattServiceUUIDs.PARTIAL_FLASHING_SERVICE;
+import static com.samsung.microbit.ui.PopUp.TYPE_ALERT;
+import static com.samsung.microbit.ui.PopUp.TYPE_PROGRESS_NOT_CANCELABLE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_ACTION_CANCEL_PRESSED;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_ACTION_CLOSE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_ACTION_OK_PRESSED;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_ACTION_UPDATE_LAYOUT;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_ACTION_UPDATE_PROGRESS;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_CANCELABLE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_ICON;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_MESSAGE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_PROGRESS;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_TITLE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_EXTRA_TYPE;
+import static com.samsung.microbit.ui.activity.PopUpActivity.INTENT_GIFF_ANIMATION_CODE;
 
 /**
  * A class to communicate with and flash the micro:bit without having to transfer the entire HEX file
@@ -38,6 +63,7 @@ import static com.samsung.microbit.data.constants.GattServiceUUIDs.PARTIAL_FLASH
 
 // A service that interacts with the BLE device via the Android BLE API.
 public class PartialFlashService extends IntentService {
+
     private final static String TAG = PartialFlashService.class.getSimpleName();
 
     private BluetoothManager mBluetoothManager;
@@ -64,6 +90,8 @@ public class PartialFlashService extends IntentService {
     private static final int STATE_CONNECTING = 1;
     private static final int STATE_CONNECTED = 2;
 
+    private static final UUID CLIENT_CHARACTERISTIC_CONFIG = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+
     // DAL Hash
     String dalHash;
 
@@ -86,6 +114,8 @@ public class PartialFlashService extends IntentService {
     public final static String EXTRA_KEEP_BOND = "com.samsung.microbit.service.extra.EXTRA_KEEP_BOND";
     public final static String INTENT_REQUESTED_PHASE = "com.samsung.microbit.service.extra.INTENT_REQUESTED_";
     public final static String EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE = "com.samsung.microbit.service.extra.EXTRA_WAIT_FOR_INIT_DEVICE_FIRMWARE";
+
+    LocalBroadcastManager localBroadcast;
 
     // Various callback methods defined by the BLE API.
     private final BluetoothGattCallback mGattCallback =
@@ -155,17 +185,36 @@ public class PartialFlashService extends IntentService {
                 @Override
                 public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
                     super.onCharacteristicChanged(gatt, characteristic);
-                    /*byte notificationValue[] = characteristic.getValue();
-                    packetState = notificationValue[1];
-                    Log.v(TAG, "Write Notify: " + packetState);
-                    */
+                    byte notificationValue[] = characteristic.getValue();
+                    Log.v(TAG, "Received Notification: " + bytesToHex(notificationValue));
 
+                    packetState = notificationValue[0];
+
+                }
+
+                @Override
+                public void onDescriptorWrite (BluetoothGatt gatt,
+                                        BluetoothGattDescriptor descriptor,
+                                        int status){
+                    if(status == BluetoothGatt.GATT_SUCCESS) {
+                        Log.v(TAG, "Descriptor success");
+                        bleReady = true;
+                    }
+                    Log.v(TAG, "GATT: " + gatt.toString() + ", Desc: " + descriptor.toString() + ", Status: " + status);
                 }
 
             };
 
     public PartialFlashService() {
         super(TAG);
+
+        IntentFilter popUpButtons = new IntentFilter();
+        popUpButtons.addAction(INTENT_ACTION_OK_PRESSED);
+        popUpButtons.addAction(INTENT_ACTION_CANCEL_PRESSED);
+
+        localBroadcast = LocalBroadcastManager.getInstance(this);
+        localBroadcast.registerReceiver(broadcastReceiver, popUpButtons);
+
     }
 
     // Write to BLE Flash Characteristic
@@ -180,22 +229,55 @@ public class PartialFlashService extends IntentService {
 
 
     public Boolean attemptPartialFlash(String filePath) {
+
+        // Display progress
+        Intent intent = new Intent();
+        intent.setAction(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.ACTION_USER_FOREGROUND);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(INTENT_EXTRA_TITLE, "Flashing");
+        intent.putExtra(INTENT_EXTRA_MESSAGE, "Updating the firmware on your micro:bit");
+        intent.putExtra(INTENT_GIFF_ANIMATION_CODE, 1);
+        intent.putExtra(INTENT_EXTRA_TYPE, TYPE_PROGRESS_NOT_CANCELABLE);
+        ComponentName cn = new ComponentName(this, PopUpActivity.class);
+        intent.setComponent(cn);
+        startActivity(intent);
+
         Log.v(TAG, filePath);
         long startTime = SystemClock.elapsedRealtime();
 
         int count = 0;
+        int progressBar = 0;
+        int numOfLines = 0;
         HexUtils hex;
         try {
             hex = new HexUtils();
             if (hex.findHexMetaData(filePath)) {
 
-//                if(!hex.getTemplateHash().equals(dalHash)){
-//                    return false;
-//                }
+                if(!hex.getTemplateHash().equals(dalHash)){
+                    return false;
+                }
+
+                numOfLines = hex.numOfLines(filePath);
+                numOfLines = numOfLines - hex.getMagicLines();
+                Log.v(TAG, "Total lines: " + numOfLines);
 
                 // Ready to flash!
                 // Set up BLE notification
-                mBluetoothGatt.setCharacteristicNotification(flashControlCharac, true);
+                if(!mBluetoothGatt.setCharacteristicNotification(flashControlCharac, true)){
+                    Log.e(TAG, "Failed to set up notifications");
+                } else {
+                    Log.v(TAG, "Notifications enabled");
+                }
+
+                BluetoothGattDescriptor descriptor = flashControlCharac.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
+                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+
+                if(bleReady) {
+                    bleReady = false;
+                    mBluetoothGatt.writeDescriptor(descriptor);
+                }
+                while(!bleReady);
 
                 // Loop through data
                 String hexData;
@@ -213,9 +295,37 @@ public class PartialFlashService extends IntentService {
                     // Split into bytes
                     byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset(), packetNum);
 
-                    // Write with response
+                    // Write without response
                     // Wait for previous write to complete
-                    Log.v("Hex Write: ", writePartialFlash(chunk).toString());
+                    boolean writeStatus = writePartialFlash(chunk);
+                    Log.v(TAG, "Hex Write: " + Boolean.toString(writeStatus));
+                    if(!writeStatus) {
+                        Log.e(TAG, "RETRANSMITTING");
+
+                        // Send packet to sync MB
+                        byte retransmitPacket[] = recordToByteArray("AAAAAAAAAAAAAAAA", 0x1234, packetNum);
+                        writeStatus = writePartialFlash(retransmitPacket);
+
+                        // If success continue, else throw error
+                        if(writeStatus)
+                        {
+                            packetState = PACKET_STATE_RETRANSMIT;
+                            count = 0;
+                        } else {
+                            // Throw error
+                            // Error Message
+                            Intent flashError = new Intent();
+                            flashError.setAction(INTENT_ACTION_UPDATE_LAYOUT);
+                            flashError.addCategory(Intent.ACTION_USER_FOREGROUND);
+                            flashError.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            flashError.putExtra(INTENT_EXTRA_TITLE, "Flash Error");
+                            flashError.putExtra(INTENT_EXTRA_MESSAGE, "Try again or flash via USB");
+                            flashError.putExtra(INTENT_GIFF_ANIMATION_CODE, 2);
+                            flashError.putExtra(INTENT_EXTRA_TYPE, TYPE_ALERT);
+                            localBroadcast.sendBroadcast(flashError);
+                        }
+
+                    }
 
                     // Sleep after 4 packets
                     count++;
@@ -223,37 +333,29 @@ public class PartialFlashService extends IntentService {
                         count = 0;
                         // Wait for notification
                         int waitTime = 0;
-                        while(packetState == PACKET_STATE_WAITING){
-                            Thread.sleep(7 + waitTime);
-                            bleReady = false;
-                            mBluetoothGatt.readCharacteristic(flashControlCharac);
-                            while(!bleReady);
-                            byte result[] = flashControlCharac.getValue();
-                            packetState = result[0];
-
-                            // Time out
-                            waitTime++;
-                            if(waitTime == 3) {
-                                packetState = PACKET_STATE_RETRANSMIT;
-                                Thread.sleep(15);
-                            }
-
-                            Log.v(TAG, "Packet State: " + bytesToHex(result));
-                        }
-
-                        // If notification is retransmit retransmit last block.
-                        // Else set start of new block
-                        if(packetState == PACKET_STATE_RETRANSMIT) {
-                            hex.rewind();
-                        } else {
-                            hex.setMark();
-                        }
+                        while(packetState == PACKET_STATE_WAITING);
 
                         // Reset to waiting state
                         packetState = PACKET_STATE_WAITING;
 
                     } else {
                         Thread.sleep(5);
+                    }
+
+                    // If notification is retransmit -> retransmit last block.
+                    // Else set start of new block
+                    if(packetState == PACKET_STATE_RETRANSMIT) {
+                        hex.rewind();
+                    } else {
+                        hex.setMark();
+
+                        // Update UI
+                        Intent progressUpdate = new Intent();
+                        progressUpdate.setAction(INTENT_ACTION_UPDATE_PROGRESS);
+                        int currentProgress = (int)Math.round((100.0 * ((float)progressBar++ / (float)numOfLines)));
+                        Log.v(TAG, "Current progress: " + currentProgress);
+                        progressUpdate.putExtra(INTENT_EXTRA_PROGRESS, currentProgress);
+                        localBroadcast.sendBroadcast( progressUpdate );
                     }
 
                     // Increment packet #
@@ -272,6 +374,15 @@ public class PartialFlashService extends IntentService {
                 long elapsedMilliSeconds = endTime - startTime;
                 double elapsedSeconds = elapsedMilliSeconds / 1000.0;
                 Log.v(TAG, "Flash Time: " + Float.toString((float)elapsedSeconds) + " seconds");
+
+                // Success Message
+                Intent flashSuccess = new Intent();
+                flashSuccess.setAction(INTENT_ACTION_UPDATE_LAYOUT);
+                flashSuccess.putExtra(INTENT_EXTRA_TITLE, "Flash Complete");
+                flashSuccess.putExtra(INTENT_EXTRA_MESSAGE, "Restart your micro:bit");
+                flashSuccess.putExtra(INTENT_GIFF_ANIMATION_CODE, 1);
+                flashSuccess.putExtra(INTENT_EXTRA_TYPE, TYPE_ALERT);
+                localBroadcast.sendBroadcast( flashSuccess );
 
             }
         } catch (IOException e) {
@@ -484,4 +595,19 @@ public class PartialFlashService extends IntentService {
         return new String(hexChars);
     }
 
+    /* Receive updates on user interaction with PopUp */
+    private BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
+
+        @Override
+        public void onReceive(Context context, final Intent intent) {
+            Log.v(TAG, "Received Broadcast: " + intent.toString());
+            if(intent.getAction().equals(INTENT_ACTION_OK_PRESSED) || intent.getAction().equals(INTENT_ACTION_CANCEL_PRESSED))
+            {
+                // Close Pop Up
+                Intent closePopUp = new Intent();
+                closePopUp.setAction(INTENT_ACTION_CLOSE);
+                localBroadcast.sendBroadcast( closePopUp );
+            }
+        }
+    };
 }

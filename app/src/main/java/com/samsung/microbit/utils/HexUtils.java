@@ -32,6 +32,8 @@ public class HexUtils {
     int currentRecordType   = 0;
     int currentRecordOffset = 0;
 
+    int magicLines = 0;
+
     /*
      Unused initializer
      */
@@ -65,6 +67,9 @@ public class HexUtils {
 
         try {
             while ((record = reader.readLine()) != null) {
+                // Inc magic lines
+                magicLines++;
+
                 // Record Type
                 switch(getRecordType(record)) {
                     case 0: // Data
@@ -229,4 +234,22 @@ public class HexUtils {
         reader.reset();
     }
 
+    /*
+    Number of lines / packets in file
+     */
+    public int numOfLines(String filePath) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(filePath)));
+        int lines = 0;
+        while (reader.readLine() != null) lines++;
+        reader.close();
+        return lines;
+    }
+
+    /*
+    Lines / packets before magic
+     */
+    public int getMagicLines()
+    {
+        return magicLines;
+    }
 }
