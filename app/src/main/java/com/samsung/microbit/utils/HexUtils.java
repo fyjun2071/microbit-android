@@ -240,7 +240,7 @@ public class HexUtils {
     public int numOfLines(String filePath) throws IOException {
         BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(filePath)));
         int lines = 0;
-        while (!reader.readLine().contains("41140E2FB82FA2B")) lines++;
+        while (reader.readLine() != null) lines++;
         reader.close();
         return lines;
     }

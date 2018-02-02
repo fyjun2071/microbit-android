@@ -292,6 +292,7 @@ public class PartialFlashService extends IntentService {
                     Log.v(TAG, "Hex Data  : " + hexData);
                     Log.v(TAG, "Hex Offset: " + Integer.toHexString(hex.getRecordOffset()));
 
+                    /* Write embedded source
                     // If Hex Data is Embedded Source Magic
                     if(hexData.length() == 32) {
                         if (hexData.substring(0, 15).equals("41140E2FB82FA2B"))
@@ -306,6 +307,7 @@ public class PartialFlashService extends IntentService {
                             break;
                         }
                     }
+                    */
 
                     // Split into bytes
                     byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset(), packetNum);
