@@ -292,6 +292,21 @@ public class PartialFlashService extends IntentService {
                     Log.v(TAG, "Hex Data  : " + hexData);
                     Log.v(TAG, "Hex Offset: " + Integer.toHexString(hex.getRecordOffset()));
 
+                    // If Hex Data is Embedded Source Magic
+                    if(hexData.length() == 32) {
+                        if (hexData.substring(0, 15).equals("41140E2FB82FA2B"))
+                        {
+                            // Start of embedded source
+                            Log.v(TAG, "Reached embedded source");
+                            // Time execution
+                            long endTime = SystemClock.elapsedRealtime();
+                            long elapsedMilliSeconds = endTime - startTime;
+                            double elapsedSeconds = elapsedMilliSeconds / 1000.0;
+                            Log.v(TAG, "Flash Time (No Embedded Source): " + Float.toString((float) elapsedSeconds) + " seconds");
+                            break;
+                        }
+                    }
+
                     // Split into bytes
                     byte chunk[] = recordToByteArray(hexData, hex.getRecordOffset(), packetNum);
 
