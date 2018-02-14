@@ -34,12 +34,11 @@ import com.samsung.microbit.utils.FileUtils;
 import com.samsung.microbit.utils.HexUtils;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Timer;
 import java.util.UUID;
 
-import static com.samsung.microbit.data.constants.CharacteristicUUIDs.MEMORY_MAP;
-import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_CONTROL;
-import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_WRITE;
+import static com.samsung.microbit.data.constants.CharacteristicUUIDs.PARTIAL_FLASH_CHARACTERISTIC;
 import static com.samsung.microbit.data.constants.GattServiceUUIDs.PARTIAL_FLASHING_SERVICE;
 import static com.samsung.microbit.ui.PopUp.TYPE_ALERT;
 import static com.samsung.microbit.ui.PopUp.TYPE_PROGRESS_NOT_CANCELABLE;
@@ -74,8 +73,7 @@ public class PartialFlashService extends IntentService {
     private BluetoothDevice device;
     BluetoothGattService Service;
 
-    BluetoothGattCharacteristic flashCharac;
-    BluetoothGattCharacteristic flashControlCharac;
+    BluetoothGattCharacteristic partialFlashCharacteristic;
 
     private Boolean waitToSend = false;
 
@@ -92,8 +90,21 @@ public class PartialFlashService extends IntentService {
 
     private static final UUID CLIENT_CHARACTERISTIC_CONFIG = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
+    // Regions
+    private static final int REGION_SD = 0;
+    private static final int REGION_DAL = 1;
+    private static final int REGION_MAKECODE = 2;
+
     // DAL Hash
     String dalHash;
+
+    // Partial Flashing Commands
+    private static final byte REGION_INFO_COMMAND = 0x0;
+    private static final byte FLASH_COMMAND = 0x1;
+    Boolean notificationReceived;
+
+    // Regions
+    String[] regions = {"SoftDevice", "DAL", "MakeCode"};
 
     public final static String ACTION_GATT_CONNECTED =
             "com.example.bluetooth.le.ACTION_GATT_CONNECTED";
@@ -188,7 +199,31 @@ public class PartialFlashService extends IntentService {
                     byte notificationValue[] = characteristic.getValue();
                     Log.v(TAG, "Received Notification: " + bytesToHex(notificationValue));
 
-                    packetState = notificationValue[0];
+                    // What command
+                    switch(notificationValue[0])
+                    {
+                        case REGION_INFO_COMMAND: {
+                            // Get Hash + Start / End addresses
+                            Log.v(TAG, "Region: " + notificationValue[1]);
+
+                            byte[] startAddress = Arrays.copyOfRange(notificationValue, 2, 6);
+                            byte[] endAddress = Arrays.copyOfRange(notificationValue, 6, 10);
+                            Log.v(TAG, "startAddress: " + bytesToHex(startAddress) + " endAddress: " + bytesToHex(endAddress));
+
+                            byte[] hash = Arrays.copyOfRange(notificationValue, 9, 17);
+                            Log.v(TAG, "Hash: " + bytesToHex(hash));
+
+                            // If Region is DAL get HASH
+                            if (notificationValue[1] == REGION_DAL)
+                                dalHash = bytesToHex(hash);
+
+                            break;
+                        }
+                        case FLASH_COMMAND: {
+                            Log.v(TAG, "Packet Acknowledged: " + notificationValue[1]);
+                            packetState = notificationValue[1];
+                        }
+                    }
 
                 }
 
@@ -220,9 +255,9 @@ public class PartialFlashService extends IntentService {
     // Write to BLE Flash Characteristic
     public Boolean writePartialFlash(byte data[]){
 
-        flashCharac.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
-        flashCharac.setValue(data);
-        boolean status = mBluetoothGatt.writeCharacteristic(flashCharac);
+        partialFlashCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+        partialFlashCharacteristic.setValue(data);
+        boolean status = mBluetoothGatt.writeCharacteristic(partialFlashCharacteristic);
         return status;
 
     }
@@ -255,7 +290,7 @@ public class PartialFlashService extends IntentService {
             if (hex.findHexMetaData(filePath)) {
 
                 if(!hex.getTemplateHash().equals(dalHash)){
-                    return false;
+                    // return false;
                 }
 
                 numOfLines = hex.numOfLines(filePath);
@@ -263,21 +298,6 @@ public class PartialFlashService extends IntentService {
                 Log.v(TAG, "Total lines: " + numOfLines);
 
                 // Ready to flash!
-                // Set up BLE notification
-                if(!mBluetoothGatt.setCharacteristicNotification(flashControlCharac, true)){
-                    Log.e(TAG, "Failed to set up notifications");
-                } else {
-                    Log.v(TAG, "Notifications enabled");
-                }
-
-                BluetoothGattDescriptor descriptor = flashControlCharac.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
-                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-
-                if(bleReady) {
-                    bleReady = false;
-                    mBluetoothGatt.writeDescriptor(descriptor);
-                }
-                while(!bleReady);
 
                 // Loop through data
                 String hexData;
@@ -379,7 +399,8 @@ public class PartialFlashService extends IntentService {
                 }
 
                 // Write End of Flash packet
-                writePartialFlash(recordToByteArray("FFFFFFFFFFFFFFFF", 0xFFFF, 0xFFFF));
+                byte[] endOfFlashPacket = {(byte)0xFF};
+                writePartialFlash(endOfFlashPacket);
 
                 // Finished Writing
                 Log.v(TAG, "Flash Complete");
@@ -418,12 +439,14 @@ public class PartialFlashService extends IntentService {
         int len = hexString.length();
         byte[] data = new byte[(len/2) + 4];
         for(int i=0; i < len; i+=2){
-            data[i / 2] = (byte) ((Character.digit(hexString.charAt(i), 16) << 4) + Character.digit(hexString.charAt(i+1), 16));
+            data[(i / 2) + 1] = (byte) ((Character.digit(hexString.charAt(i), 16) << 4) + Character.digit(hexString.charAt(i+1), 16));
         }
 
-        data[(len/2)]   = (byte)(offset >> 8);
-        data[(len/2)+1] = (byte)(offset & 0xFF);
-        data[(len/2)+2] = (byte)(packetNum >> 8);
+        // WRITE Command
+        data[0] = 0x01;
+
+        data[(len/2)+1]   = (byte)(offset >> 8);
+        data[(len/2)+2] = (byte)(offset & 0xFF);
         data[(len/2)+3] = (byte)(packetNum & 0xFF);
 
         return data;
@@ -464,6 +487,27 @@ public class PartialFlashService extends IntentService {
             Log.e(TAG, "lost connection");
             return false;
         }
+
+        while(!bleReady);
+        // Get Characteristic
+        partialFlashCharacteristic = Service.getCharacteristic(PARTIAL_FLASH_CHARACTERISTIC);
+
+
+        // Set up BLE notification
+        if(!mBluetoothGatt.setCharacteristicNotification(partialFlashCharacteristic, true)){
+            Log.e(TAG, "Failed to set up notifications");
+        } else {
+            Log.v(TAG, "Notifications enabled");
+        }
+
+        BluetoothGattDescriptor descriptor = partialFlashCharacteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
+        descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+
+        if(bleReady) {
+            bleReady = false;
+            mBluetoothGatt.writeDescriptor(descriptor);
+        }
+        while(!bleReady);
 
         return true;
     }
@@ -510,84 +554,18 @@ public class PartialFlashService extends IntentService {
     private Boolean readMemoryMap() {
         boolean status; // Gatt Status
 
-
         try {
-            while(!bleReady);
-            // Get Characteristic
-            BluetoothGattCharacteristic memoryMapChar = Service.getCharacteristic(MEMORY_MAP);
-
-            if (memoryMapChar == null) {
-                Log.e(TAG, "char not found!");
-                return false;
-            }
-
-            flashCharac = Service.getCharacteristic(PARTIAL_FLASH_WRITE);
-            if (flashCharac == null) {
-                Log.e(TAG, "char not found!");
-            }
-
-            flashControlCharac = Service.getCharacteristic(PARTIAL_FLASH_CONTROL);
-            if (flashControlCharac == null) {
-                Log.e(TAG, "char not found!");
-            } else {
-                Log.v(TAG, "flash control: " + flashControlCharac.toString());
-            }
-
-            // Request Regions
-            memoryMapChar.setValue(0xFF, BluetoothGattCharacteristic.FORMAT_UINT8, 0);
-            bleReady = false;
-            status = mBluetoothGatt.writeCharacteristic(memoryMapChar);
-            while(!bleReady);
-            Log.v(TAG, "Region WRITE result: " + status);
-
-            // Log Names
-            bleReady = false;
-            status = mBluetoothGatt.readCharacteristic(memoryMapChar);
-            while(!bleReady);
-
-            Log.v(TAG, "Region READ result: " + status);
-            String regions = memoryMapChar.getStringValue(0);
-            Log.v(TAG, "Regions: " + regions);
-
-            // Iterate through regions to get ID #s
-            int i = 0;
-            byte[] byteArray;
-            while(regions.charAt(3 * i) != ' '){
-                Log.v(TAG, regions.substring(3 * i, (3 * i) + 3));
-
+            for (int i = 0; i < 3; i++)
+            {
                 // Get Start, End, and Hash of each Region
                 // Request Region
-                byte[] selector = {(byte)(i & 0xFF)};
-                memoryMapChar.setValue(selector);
+                byte[] payload = {REGION_INFO_COMMAND, (byte)i};
+                partialFlashCharacteristic.setValue(payload);
                 bleReady = false;
-                status = mBluetoothGatt.writeCharacteristic(memoryMapChar);
+                notificationReceived = false;
+                status = mBluetoothGatt.writeCharacteristic(partialFlashCharacteristic);
+                Log.v(TAG, "Rq: Region " + i);
                 while(!bleReady);
-                Log.v(TAG, "Selector WRITE: " + status + ", DATA: " + memoryMapChar.getValue()[0]);
-
-                // Log Start/End
-                bleReady = false;
-                status = mBluetoothGatt.readCharacteristic(memoryMapChar);
-                while(!bleReady);
-                byteArray = memoryMapChar.getValue();
-                int startAddress = ((0xFF & byteArray[3]) << 24 | (0xFF & byteArray[2]) << 16 | (0xFF & byteArray[1]) << 8 | (0xFF & byteArray[0]));
-                int endAddress   = ((0xFF & byteArray[11]) << 24 | (0xFF & byteArray[10]) << 16 | (0xFF & byteArray[9]) << 8 | (0xFF & byteArray[8]));
-                Log.v(TAG, "Start: 0x" + Integer.toHexString(startAddress) + ", End: 0x" + Integer.toHexString(endAddress));
-
-                // Log Hash
-                bleReady = false;
-                status = mBluetoothGatt.readCharacteristic(memoryMapChar);
-                while(!bleReady);
-                byteArray = memoryMapChar.getValue();
-                // Get Hash From Byte Array
-                // Convert to string
-                Log.v(TAG, "Hash: " + bytesToHex(byteArray).substring(0,16));
-
-                // IF DAL Store Hash for comparison
-                if(regions.substring(3 * i, (3 * i) + 3).equals("DAL")){
-                    dalHash = bytesToHex(byteArray).substring(0,16);
-                }
-
-                i++;
             }
 
 

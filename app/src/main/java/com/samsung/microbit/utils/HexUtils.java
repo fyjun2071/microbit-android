@@ -3,6 +3,7 @@ package com.samsung.microbit.utils;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.EOFException;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -94,7 +95,7 @@ public class HexUtils {
 
             }
         } catch (Exception e){
-            Log.e(TAG, e.toString());
+            Log.e(TAG, "Find Magic " + e.toString());
         }
 
         // If magic is never found and there is no EOF file marker
@@ -129,8 +130,13 @@ public class HexUtils {
     @return Record type as a decimal
     */
     private int getRecordType(String record){
-        String hexType = record.substring(7,9);
-        return Integer.parseInt(hexType, 16);
+        try {
+            String hexType = record.substring(7, 9);
+            return Integer.parseInt(hexType, 16);
+        } catch (Exception e){
+            Log.e(TAG, "getRecordType " + e.toString());
+            return 0;
+        }
     }
 
     /*
@@ -147,8 +153,13 @@ public class HexUtils {
     @return Data
     */
     private String getRecordData(String record){
-        int len = getRecordDataLength(record);
-        return record.substring(9,9+len);
+        try {
+            int len = getRecordDataLength(record);
+            return record.substring(9, 9 + len);
+        } catch (Exception e) {
+            Log.e(TAG, "Get record data " + e.toString());
+            return "";
+        }
     }
 
     /*
