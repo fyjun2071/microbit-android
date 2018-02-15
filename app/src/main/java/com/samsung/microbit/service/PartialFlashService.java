@@ -290,7 +290,7 @@ public class PartialFlashService extends IntentService {
             if (hex.findHexMetaData(filePath)) {
 
                 if(!hex.getTemplateHash().equals(dalHash)){
-                    // return false;
+                    return false;
                 }
 
                 numOfLines = hex.numOfLines(filePath);
